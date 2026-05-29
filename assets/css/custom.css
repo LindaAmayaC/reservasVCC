@@ -1,0 +1,182 @@
+/* Vacaciones con Clase — estilos compartidos */
+
+body { font-family: 'Segoe UI', Arial, sans-serif; }
+
+/* Tarjetas del menú principal */
+.card-tile {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  background: #ffffff;
+  padding: 1.25rem 1.5rem;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  transition: all .15s ease-in-out;
+}
+.card-tile:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+  border-color: #cbd5e1;
+}
+.icon-wrap {
+  display: flex; align-items: center; justify-content: center;
+  width: 48px; height: 48px; border-radius: 10px; flex-shrink: 0;
+}
+
+/* Tipo Excel: tablas y campos */
+.form-cell {
+  border: 1px solid #cbd5e1;
+  padding: 4px 8px;
+  font-size: 0.85rem;
+  background: #ffffff;
+}
+.form-label {
+  background: #f1f5f9;
+  font-weight: 600;
+  color: #334155;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.form-header {
+  background: #0c4a6e;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  text-align: center;
+}
+.form-subheader {
+  background: #075985;
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+input.cell-input, select.cell-input, textarea.cell-input {
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 0.85rem;
+  color: #0f172a;
+  padding: 2px 4px;
+}
+input.cell-input:focus, select.cell-input:focus, textarea.cell-input:focus {
+  background: #fef9c3;
+}
+
+.cell-num { text-align: right; font-variant-numeric: tabular-nums; }
+.cell-center { text-align: center; }
+
+.section-title {
+  background: linear-gradient(to right, #0c4a6e, #075985);
+  color: #ffffff;
+  padding: 8px 12px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: 6px 6px 0 0;
+}
+
+.btn-primary {
+  background: #0369a1;
+  color: white;
+  padding: 8px 18px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 0.85rem;
+  border: none;
+  cursor: pointer;
+  transition: background .15s;
+}
+.btn-primary:hover { background: #075985; }
+
+.btn-secondary {
+  background: #e2e8f0;
+  color: #334155;
+  padding: 8px 18px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 0.85rem;
+  border: none;
+  cursor: pointer;
+  transition: background .15s;
+}
+.btn-secondary:hover { background: #cbd5e1; }
+
+.btn-danger {
+  background: #dc2626;
+  color: white;
+  padding: 8px 18px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 0.85rem;
+  border: none;
+  cursor: pointer;
+}
+.btn-danger:hover { background: #b91c1c; }
+
+/* Navegación superior dentro de páginas internas */
+.topnav {
+  background: #ffffff;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 10px 0;
+}
+.topnav a {
+  color: #475569;
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 6px 12px;
+  border-radius: 6px;
+  transition: all .15s;
+}
+.topnav a:hover { background: #f1f5f9; color: #0c4a6e; }
+.topnav a.active { background: #0c4a6e; color: #ffffff; }
+
+/* Tabla "Excel" */
+.excel-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #ffffff;
+}
+.excel-table td, .excel-table th {
+  border: 1px solid #cbd5e1;
+  padding: 4px 8px;
+  vertical-align: middle;
+  font-size: 0.82rem;
+}
+
+.terms-box {
+  background: #fafafa;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 12px 16px;
+  font-size: 0.72rem;
+  color: #475569;
+  line-height: 1.4;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.badge-reserva {
+  display: inline-block;
+  background: #fef3c7;
+  color: #92400e;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  border: 1px solid #fde68a;
+}
+
+/* Imprimir limpio */
+@media print {
+  .no-print { display: none !important; }
+  body { background: white; }
+  .terms-box { max-height: none; overflow: visible; }
+}
