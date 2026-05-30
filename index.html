@@ -381,6 +381,7 @@
     // ---- Proveedores ----
     const FIELD_PROV_EMPRESA   = 'UF_CRM_1760557505';     // (ref.) campo vínculo-a-compañías del negocio; el <select> ahora lista todas las compañías proveedoras del CRM
     const FIELD_PROV_HISTORIAL = 'UF_CRM_1780020580494';  // string MULTIPLE — una entrada por abono a proveedor
+    const FIELD_PROV_ACUMULADO = 'UF_CRM_1780117784582';  // suma total de abonos pagados a proveedores (COP)
 
     // Serialización del historial — el campo es string MULTIPLE en Bitrix:
     // cada abono va como una entrada independiente del array. Bitrix la renderiza
@@ -445,12 +446,16 @@
     }
 
     // ---- Concatenado de PROVEEDOR (string MULTIPLE) ----
-    // Formato por entrada (igual que el de cliente): "2026-05-26 | Hoteles Riu Cancún | Valor 1.000.000"
+    // Misma estructura que cliente, con "Empresa" en lugar de "Nombre":
+    //   "2026-05-26 | Hoteles Riu Cancún | COP | TRM 1 | Valor 1.000.000 | Total 1.000.000"
     function provRowToLine(r) {
       const fecha   = String(r.fecha || '').replace(/\|/g, '/');
       const empresa = String(r.empresa || '').replace(/\|/g, '/').replace(/[\r\n]+/g, ' ').trim();
+      const mon     = String(r.moneda || 'COP');
+      const trm     = fmtNumLegible(r.trm || 0);
       const val     = fmtNumLegible(r.valor || 0);
-      return `${fecha} | ${empresa} | Valor ${val}`;
+      const tot     = fmtNumLegible(r.valorCalculado || 0);
+      return `${fecha} | ${empresa} | ${mon} | TRM ${trm} | Valor ${val} | Total ${tot}`;
     }
     function provHistorialToArray(rows) {
       return (rows || []).map(provRowToLine);
@@ -458,11 +463,27 @@
     function lineToProvRow(line) {
       const txt = String(line || '').trim();
       if (!txt) return null;
+      // Detectar formato nuevo (6 segmentos con " | ") vs viejo (3 segmentos)
       const p = txt.split(' | ');
+      if (p.length >= 6) {
+        return {
+          fecha:   (p[0] || '').trim(),
+          empresa: (p[1] || '').trim(),
+          moneda:  (p[2] || 'COP').trim(),
+          trm:     parseNumLegible(p[3]),
+          valor:   parseNumLegible(p[4]),
+          valorCalculado: parseNumLegible(p[5]),
+          archivos: []
+        };
+      }
+      // Compat: formato viejo "Fecha | Empresa | Valor X"
       return {
         fecha:   (p[0] || '').trim(),
         empresa: (p[1] || '').trim(),
+        moneda:  'COP',
+        trm:     1,
         valor:   parseNumLegible(p[2]),
+        valorCalculado: parseNumLegible(p[2]),
         archivos: []
       };
     }
@@ -794,15 +815,31 @@
           <button type="button" class="ui-btn ui-btn-ghost ui-btn-sm del-prov" title="Quitar" style="color: hsl(var(--destructive));">${trashIcon}</button>
         </div>
         <div class="grid grid-cols-12 gap-3">
-          <div class="col-span-12 sm:col-span-7">
+          <div class="col-span-12 sm:col-span-6">
             <label class="ui-label">Empresa proveedora</label>
             <select class="ui-select empresa">
               ${opts}
             </select>
           </div>
-          <div class="col-span-12 sm:col-span-5">
-            <label class="ui-label">Valor recibido (COP)</label>
+          <div class="col-span-6 sm:col-span-2">
+            <label class="ui-label">Moneda</label>
+            <select class="ui-select moneda">
+              <option value="COP">COP</option>
+              <option value="USD">USD</option>
+              <option value="EUR">EUR</option>
+            </select>
+          </div>
+          <div class="col-span-6 sm:col-span-4">
+            <label class="ui-label">Tasa de cambio</label>
+            <input type="number" step="0.01" min="0" class="ui-input trm" placeholder="0.00" />
+          </div>
+          <div class="col-span-6 sm:col-span-4">
+            <label class="ui-label">Valor pagado</label>
             <input type="number" step="0.01" min="0" class="ui-input valor" placeholder="0.00" />
+          </div>
+          <div class="col-span-12 sm:col-span-4 total-wrap">
+            <label class="ui-label">Total (COP)</label>
+            <input type="text" class="ui-input total" readonly disabled value="—" style="background: hsl(var(--muted)); font-weight: 600; color: hsl(262 83% 48%);" />
           </div>
           <div class="col-span-12">
             <label class="ui-label">Comprobantes</label>
@@ -838,12 +875,10 @@
           // resetear inputs en lugar de quitar el último
           card.querySelectorAll('input, select').forEach(i => { if (i.type !== 'file') i.value = ''; });
           card.querySelector('.file-list').innerHTML = '';
-          if (kind === 'cliente') {
-            card.querySelector('.moneda').value = 'COP';
-            const t = card.querySelector('.total');
-            t.value = '—';
-            t.disabled = true;
-          }
+          const monedaSel = card.querySelector('.moneda');
+          if (monedaSel) monedaSel.value = 'COP';
+          const t = card.querySelector('.total');
+          if (t) { t.value = '—'; t.disabled = true; }
           return;
         }
         card.remove();
@@ -871,12 +906,12 @@
         });
       }
 
-      // cálculo cliente
-      if (kind === 'cliente') {
-        const moneda = card.querySelector('.moneda');
-        const trm    = card.querySelector('.trm');
-        const valor  = card.querySelector('.valor');
-        const total  = card.querySelector('.total');
+      // cálculo total COP (aplica a cliente y proveedor: ambos tienen moneda/TRM/valor/total)
+      const moneda = card.querySelector('.moneda');
+      const trm    = card.querySelector('.trm');
+      const valor  = card.querySelector('.valor');
+      const total  = card.querySelector('.total');
+      if (moneda && trm && valor && total) {
         function recalc() {
           const esCOP = moneda.value === 'COP';
           if (esCOP) {
@@ -969,12 +1004,103 @@
       return ufCode.replace(/^UF_CRM_/, 'ufCrm_'); // fallback
     }
 
+    // ============================================================
+    // BITRIX DISK — subir comprobantes al DRIVE COMPARTIDO
+    // ============================================================
+    // Cache de la sesión: storage común + carpeta padre + subcarpetas por negocio.
+    const SHARED_PARENT_FOLDER_NAME = 'Comprobantes de abonos';
+    const _diskCache = { commonRootFolderId: null, parentFolderId: null, dealFolders: {} };
+
+    // Localiza la carpeta raíz del Drive de la empresa (storage común).
+    async function getCommonStorageRootFolderId() {
+      if (_diskCache.commonRootFolderId) return _diskCache.commonRootFolderId;
+      const storages = await bxCallList('disk.storage.getlist', { filter: { ENTITY_TYPE: 'common' } });
+      if (!storages.length) throw new Error('No se encontró el drive compartido (storage común).');
+      const storage = storages[0];
+      const rootId = storage.ROOT_OBJECT_ID || storage.ROOT_FOLDER_ID || storage.ROOT;
+      if (!rootId) throw new Error('El storage común no expone su carpeta raíz.');
+      console.log('[VCC] Drive compartido:', storage.NAME, '→ root folder', rootId);
+      _diskCache.commonRootFolderId = rootId;
+      return rootId;
+    }
+
+    // Busca una subcarpeta por nombre dentro de parentId; si no existe la crea.
+    async function findOrCreateSubfolder(parentId, name) {
+      const children = await bxCallList('disk.folder.getchildren', { id: parentId });
+      const existing = children.find(c => (c.NAME === name) && (c.TYPE === 'folder' || c.OBJECT_TYPE === 'folder'));
+      if (existing) {
+        console.log('[VCC] Carpeta existente reusada:', name, '→', existing.ID);
+        return existing.ID;
+      }
+      const created = await bxCall('disk.folder.addsubfolder', { id: parentId, data: { NAME: name } });
+      const newId = created?.ID || created;
+      console.log('[VCC] Carpeta creada:', name, '→', newId);
+      return newId;
+    }
+
+    // Devuelve el id de la subcarpeta del negocio: /Comprobantes de abonos/Deal {id}/
+    async function getDealFolderId(dealId) {
+      if (_diskCache.dealFolders[dealId]) return _diskCache.dealFolders[dealId];
+      const rootId = await getCommonStorageRootFolderId();
+      if (!_diskCache.parentFolderId) {
+        _diskCache.parentFolderId = await findOrCreateSubfolder(rootId, SHARED_PARENT_FOLDER_NAME);
+      }
+      const dealFolderId = await findOrCreateSubfolder(_diskCache.parentFolderId, `Deal ${dealId}`);
+      _diskCache.dealFolders[dealId] = dealFolderId;
+      return dealFolderId;
+    }
+
+    // Sube los comprobantes a la carpeta del negocio en el drive compartido.
+    // Devuelve un array de b_file ids listos para vincular a campos CRM file.
+    async function uploadComprobantesToSharedDrive(dealId, comprobantes) {
+      if (!comprobantes.length) return [];
+      const folderId = await getDealFolderId(dealId);
+      const bFileIds = [];
+      for (const f of comprobantes) {
+        try {
+          const b64 = await fileToBase64(f);
+          const uploaded = await bxCall('disk.folder.uploadfile', {
+            id: folderId,
+            fileContent: [f.name, b64],
+            data: { NAME: f.name }
+          });
+          // disk.folder.uploadfile devuelve el objeto del disk file. Sus props posibles:
+          // FILE_ID (b_file id), ID (disk file id). Necesitamos b_file id para crm file field.
+          let bFileId = uploaded?.FILE_ID;
+          if (!bFileId && uploaded?.ID) {
+            // fallback: pedir disk.file.get para obtener FILE_ID
+            try {
+              const full = await bxCall('disk.file.get', { id: uploaded.ID });
+              bFileId = full?.FILE_ID;
+            } catch (e) { console.warn('[VCC] disk.file.get fallback falló', e); }
+          }
+          if (bFileId) {
+            bFileIds.push(Number(bFileId));
+            console.log('[VCC] Subido a drive compartido:', f.name, '→ b_file', bFileId);
+          } else {
+            console.warn('[VCC] No se pudo resolver b_file id para', f.name, uploaded);
+          }
+        } catch (e) {
+          console.warn(`[VCC] Error subiendo ${f.name} al drive compartido:`, e);
+        }
+      }
+      return bFileIds;
+    }
+
     // Adjunta comprobantes al campo file MULTIPLE del negocio SIN borrar los existentes.
     // crm.deal.update NO sirve para campos file; con crm.item.update se conservan los
     // existentes pasándolos como {id:X} y los nuevos como ["nombre", base64].
     // entityTypeId=2 = negocio (deal). Lo que NO se incluya en el array se borra.
+    // Sube los comprobantes al drive COMPARTIDO (no al personal) y los vincula al
+    // campo file MULTIPLE del negocio, preservando los archivos ya existentes.
+    // Devuelve { count, bFileIds } por si se quieren reusar (p.ej. timeline comment).
     async function appendComprobantesToDeal(dealId, comprobantes) {
-      if (!comprobantes.length) return 0;
+      if (!comprobantes.length) return { count: 0, bFileIds: [] };
+
+      // 1) Subir a drive compartido → obtener b_file ids reusables
+      const bFileIds = await uploadComprobantesToSharedDrive(dealId, comprobantes);
+
+      // 2) Leer el item para conocer la key real y los ids ya existentes
       const itemRes = await bxCall('crm.item.get', { entityTypeId: 2, id: dealId });
       const item = itemRes?.item || itemRes || {};
       const fileKey = findItemFileKey(item, FIELD_ABONOS_FILE);
@@ -983,31 +1109,27 @@
       const existentes = arrActual
         .filter(f => f && f.id != null)
         .map(f => ({ id: f.id }));   // {id:X} → preservar
-      const nuevos = [];
-      for (const f of comprobantes) {
-        try {
-          const b64f = await fileToBase64(f);
-          nuevos.push([f.name, b64f]);
-        } catch (e) {
-          console.warn(`[VCC] No se pudo leer el comprobante ${f.name}:`, e);
-        }
-      }
-      console.log('[VCC] appendComprobantesToDeal → crm.item.update (file)', {
+
+      // 3) Vincular los archivos del drive compartido al campo CRM via b_file id
+      const nuevos = bFileIds.map(id => ({ id }));
+      console.log('[VCC] appendComprobantesToDeal → crm.item.update (file, shared drive)', {
         dealId, fileKey,
         existentesPreservados: existentes.length,
-        nuevos: nuevos.map(n => n[0])
+        nuevosBFileIds: bFileIds
       });
       await bxCall('crm.item.update', {
         entityTypeId: 2,
         id: dealId,
         fields: { [fileKey]: [...existentes, ...nuevos] }
       });
-      return nuevos.length;
+      return { count: nuevos.length, bFileIds };
     }
 
-    // Publica un comentario en el timeline del negocio con el resumen del abono
-    // y, opcionalmente, los comprobantes adjuntos.
-    //   crm.timeline.comment.add → FILES: [ ["nombre", base64], ... ]
+    // Publica un comentario en el timeline del negocio con el resumen + adjuntos inline.
+    // Los archivos se suben como [name, base64] → quedan visibles dentro del comentario
+    // (con nombre real y previsualización). Trade-off: Bitrix crea una copia en el
+    // drive personal del usuario que ejecuta la app (los originales ya están en el
+    // drive compartido vía appendComprobantesToDeal).
     async function postAbonoTimelineComment(dealId, comentarioTexto, comprobantes = []) {
       if (typeof BX24 === 'undefined') {
         console.info('[VCC] (mock) comentario timeline:', comentarioTexto, comprobantes.map(f => f.name));
@@ -1020,7 +1142,7 @@
       }
       const fields = { ENTITY_ID: dealId, ENTITY_TYPE: 'deal', COMMENT: comentarioTexto };
       if (files.length) fields.FILES = files;
-      console.log('[VCC] postAbonoTimelineComment → crm.timeline.comment.add', { dealId, adjuntos: files.length });
+      console.log('[VCC] postAbonoTimelineComment → crm.timeline.comment.add', { dealId, adjuntosInline: files.length });
       await bxCall('crm.timeline.comment.add', { fields });
     }
 
@@ -1039,17 +1161,19 @@
       }
 
       // 1) Historial (string MULTIPLE) + acumulado → crm.deal.update (campos no-file, OK).
+      //    El acumulado se guarda con separadores de miles ("1.000.000") para que se
+      //    vea legible en la ficha del negocio; al releerlo lo parseamos con parseNumLegible.
       const updateFields = { [FIELD_HISTORIAL]: historialArr };
-      if (opts.nuevoTotal != null) updateFields[FIELD_ACUMULADO] = opts.nuevoTotal;
+      if (opts.nuevoTotal != null) updateFields[FIELD_ACUMULADO] = fmtNumLegible(opts.nuevoTotal);
       console.log('[VCC] saveAbonosFile → crm.deal.update', {
         dealId, entradasHistorial: historialArr.length,
         nuevoTotal: opts.nuevoTotal ?? '(sin cambio)'
       });
       await bxCall('crm.deal.update', { id: dealId, fields: updateFields });
 
-      // 2) Comprobantes → campo file MULTIPLE del negocio (append, preservando).
-      const comprobantesSubidos = await appendComprobantesToDeal(dealId, comprobantes);
-      return { mock: false, comprobantesSubidos };
+      // 2) Comprobantes → drive compartido + vínculo al campo file del negocio.
+      const { count: comprobantesSubidos, bFileIds } = await appendComprobantesToDeal(dealId, comprobantes);
+      return { mock: false, comprobantesSubidos, bFileIds };
     }
 
     // ---- PROVEEDOR: leer / guardar historial concatenado ----
@@ -1073,20 +1197,28 @@
     }
 
     async function saveProvAbonos(dealId, allRows, dealDataActual, opts = {}) {
+      // opts: { nuevoTotal, comprobantes: File[] }
       const comprobantes = Array.isArray(opts.comprobantes) ? opts.comprobantes : [];
       const historialArr = provHistorialToArray(allRows);
 
       if (typeof BX24 === 'undefined') {
         localStorage.setItem(mockProvHistorialKey(dealId), JSON.stringify(historialArr));
-        console.info('[VCC] (mock) historial proveedor guardado', { filas: allRows.length, comprobantes: comprobantes.map(f => f.name) });
+        console.info('[VCC] (mock) historial proveedor guardado', {
+          filas: allRows.length, nuevoTotal: opts.nuevoTotal, comprobantes: comprobantes.map(f => f.name)
+        });
         return { mock: true, comprobantesSubidos: comprobantes.length };
       }
 
-      console.log('[VCC] saveProvAbonos → crm.deal.update', { dealId, entradasHistorial: historialArr.length });
-      await bxCall('crm.deal.update', { id: dealId, fields: { [FIELD_PROV_HISTORIAL]: historialArr } });
+      const updateFields = { [FIELD_PROV_HISTORIAL]: historialArr };
+      // acumulado con separadores de miles ("1.000.000") para que se vea legible en la ficha
+      if (opts.nuevoTotal != null) updateFields[FIELD_PROV_ACUMULADO] = fmtNumLegible(opts.nuevoTotal);
+      console.log('[VCC] saveProvAbonos → crm.deal.update', {
+        dealId, entradasHistorial: historialArr.length, nuevoTotal: opts.nuevoTotal ?? '(sin cambio)'
+      });
+      await bxCall('crm.deal.update', { id: dealId, fields: updateFields });
 
-      const comprobantesSubidos = await appendComprobantesToDeal(dealId, comprobantes);
-      return { mock: false, comprobantesSubidos };
+      const { count: comprobantesSubidos, bFileIds } = await appendComprobantesToDeal(dealId, comprobantes);
+      return { mock: false, comprobantesSubidos, bFileIds };
     }
 
     // ============================================================
@@ -1110,11 +1242,18 @@
         };
       });
       const prov = [...document.querySelectorAll('#listProv .abono-card')].map(c => {
+        const moneda = c.querySelector('.moneda').value;
+        const trm    = VCC.parseNumber(c.querySelector('.trm').value);
+        const valor  = VCC.parseNumber(c.querySelector('.valor').value);
+        const valorCalculado = moneda === 'COP' ? valor : (valor * trm);
         const fileObjs = Array.isArray(c._files) ? c._files.slice() : [];
         return {
           empresaId: c.querySelector('.empresa').value,
           empresa:   c.querySelector('.empresa').selectedOptions[0]?.textContent || '',
-          valor:     VCC.parseNumber(c.querySelector('.valor').value),
+          moneda,
+          trm: moneda === 'COP' ? 1 : trm,
+          valor,
+          valorCalculado: Math.round(valorCalculado),
           archivos:  fileObjs.map(f => f.name),
           fileObjs
         };
@@ -1151,7 +1290,7 @@
       try {
         // 1. Releer el deal completo (acumulado actual + archivo previo si existe)
         const dealData = await getBitrixDeal(state.dealId);
-        const actual = Number(dealData?.[FIELD_ACUMULADO] || 0);
+        const actual = parseNumLegible(dealData?.[FIELD_ACUMULADO] || 0);
 
         // 2. Cargar filas previas del archivo Excel (si existe en el campo)
         const filasPrevias = await loadAbonosFile(state.dealId, dealData);
@@ -1188,7 +1327,7 @@
           { nuevoTotal, sumaAbonos, nuevasFilas, comprobantes }
         );
 
-        // Comentario en el timeline con el resumen + comprobantes
+        // Comentario en el timeline con el resumen + comprobantes inline
         const lineasCom = validos.map(a => {
           const base = `• ${a.nombre}: ${fmtNumLegible(a.valor)} ${a.moneda}`;
           return a.moneda !== 'COP' ? `${base} (Total ${fmtNumLegible(a.valorCalculado)} COP)` : base;
@@ -1238,7 +1377,13 @@
       // validación: al menos un abono con empresa seleccionada y valor > 0
       const validos = data.prov.filter(a => a.empresaId && a.valor > 0);
       if (validos.length === 0) {
-        alert('Selecciona una empresa proveedora e ingresa un valor mayor a 0.');
+        alert('Selecciona una empresa proveedora e ingresa un valor pagado mayor a 0.');
+        return;
+      }
+      // validación TRM cuando moneda != COP
+      const sinTRM = validos.find(a => a.moneda !== 'COP' && (!a.trm || a.trm <= 0));
+      if (sinTRM) {
+        alert('Ingresa la tasa de cambio para los abonos en USD/EUR.');
         return;
       }
 
@@ -1247,52 +1392,66 @@
       btn.innerHTML = 'Registrando…';
 
       try {
-        // 1. Releer el deal (historial proveedor previo)
+        // 1. Releer el deal (historial + acumulado previo)
         const dealData = await getBitrixDeal(state.dealId);
+        const actual = parseNumLegible(dealData?.[FIELD_PROV_ACUMULADO] || 0);
         const filasPrevias = await loadProvAbonos(state.dealId, dealData);
 
-        // 2. Construir las nuevas filas
+        // 2. Construir las nuevas filas (con moneda/TRM/valor/total)
         const fechaHoy = VCC.todayISO();
         const nuevasFilas = validos.map(a => ({
           fecha: fechaHoy,
           empresa: a.empresa,
+          moneda: a.moneda,
+          trm: a.trm,
           valor: a.valor,
+          valorCalculado: a.valorCalculado,
           archivos: a.archivos
         }));
         const todasLasFilas = filasPrevias.concat(nuevasFilas);
-        const sumaAbonos = nuevasFilas.reduce((acc, r) => acc + (Number(r.valor) || 0), 0);
 
-        // 3. Comprobantes
+        // 3. Sumar a acumulado (en COP, usando valorCalculado)
+        const sumaAbonos = nuevasFilas.reduce((acc, r) => acc + (Number(r.valorCalculado) || 0), 0);
+        const nuevoTotal = actual + sumaAbonos;
+
+        // 4. Comprobantes
         const comprobantes = [];
         validos.forEach(a => { if (Array.isArray(a.fileObjs)) comprobantes.push(...a.fileObjs); });
 
-        // 4. Guardar historial proveedor + comprobantes (append)
-        const saveRes = await saveProvAbonos(state.dealId, todasLasFilas, dealData, { comprobantes });
+        // 5. Guardar historial + acumulado + comprobantes
+        const saveRes = await saveProvAbonos(state.dealId, todasLasFilas, dealData, { nuevoTotal, comprobantes });
 
-        // 4b. Comentario en el timeline con el resumen + comprobantes
-        const lineasCom = validos.map(a => `• ${a.empresa}: ${fmtNumLegible(a.valor)} COP`);
+        // 5b. Comentario en el timeline con el resumen + comprobantes inline
+        const lineasCom = validos.map(a => {
+          const base = `• ${a.empresa}: ${fmtNumLegible(a.valor)} ${a.moneda}`;
+          return a.moneda !== 'COP' ? `${base} (Total ${fmtNumLegible(a.valorCalculado)} COP)` : base;
+        });
         await postAbonoTimelineComment(
           state.dealId,
           `💰 Abono(s) a proveedor registrado(s) desde la app\n${lineasCom.join('\n')}`,
           comprobantes
         );
 
-        // 5. sincronizar memoria / mock
-        if (state.deal) state.deal[FIELD_PROV_HISTORIAL] = provHistorialToArray(todasLasFilas);
+        // 6. sincronizar memoria / mock
+        if (state.deal) {
+          state.deal[FIELD_PROV_HISTORIAL] = provHistorialToArray(todasLasFilas);
+          state.deal[FIELD_PROV_ACUMULADO] = nuevoTotal;
+        }
         if (typeof BX24 === 'undefined' && MOCK_DEALS[state.dealId]) {
           MOCK_DEALS[state.dealId][FIELD_PROV_HISTORIAL] = provHistorialToArray(todasLasFilas);
+          MOCK_DEALS[state.dealId][FIELD_PROV_ACUMULADO] = nuevoTotal;
         }
 
         console.log('[VCC] Abonos a proveedor registrados:', {
-          sumaAbonos, nuevasFilas, totalFilas: todasLasFilas.length,
+          sumaAbonos, nuevoTotal, nuevasFilas, totalFilas: todasLasFilas.length,
           comprobantesSubidos: saveRes.comprobantesSubidos
         });
 
-        // 6. modal de éxito
+        // 7. modal de éxito
         showAbonoOkModal({
           tipo: 'proveedor',
           sumaAbonos,
-          nuevoTotal: null,
+          nuevoTotal,
           totalFilas: todasLasFilas.length,
           comprobantesSubidos: saveRes.comprobantesSubidos
         });
