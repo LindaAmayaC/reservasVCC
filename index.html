@@ -247,6 +247,10 @@
           <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Fecha de viaje</p>
           <p class="text-sm font-semibold mt-1" id="dealFecha">—</p>
         </div>
+        <div class="md:col-span-2 rounded-md px-4 py-2 text-center mx-auto" style="background: hsl(199 89% 96%); border: 1px solid hsl(199 89% 85%); max-width: 28rem; width: 100%;">
+          <p class="text-xs font-medium uppercase tracking-wide" style="color: hsl(199 89% 35%);">Total de negociación</p>
+          <p class="text-sm font-semibold mt-0.5" id="dealTotal" style="color: hsl(199 89% 30%);">—</p>
+        </div>
       </div>
     </section>
 
@@ -374,14 +378,18 @@
     // ============================================================
     // Campos custom de Bitrix24 (ajustar si cambian)
     const CATEGORY_ID_CAMPANAS = 2;                       // pipeline "Campañas"
-    const FIELD_ACUMULADO      = 'UF_CRM_1779766720890';  // suma total de abonos del cliente (COP)
+    const FIELD_ACUMULADO      = 'UF_CRM_1781024172689';  // suma total de abonos del cliente (COP) — campo string, acepta "1.000.000"
+    const FIELD_ACUMULADO_USD  = 'UF_CRM_1780497811552';  // suma total de abonos del cliente en USD (solo valores USD)
     const FIELD_ABONOS_FILE    = 'UF_CRM_1779807040092';  // campo file MULTIPLE para comprobantes de abono
     const FIELD_HISTORIAL      = 'UF_CRM_1779806425172';  // string MULTIPLE — una entrada por abono (cliente)
     const FIELD_FECHA_VIAJE    = 'UF_CRM_1756846453';     // fecha del viaje (datetime — usamos solo la fecha)
+    const FIELD_CLI_CONTACTOS  = 'UF_CRM_1756499338';     // vínculo a contactos del negocio; el <select> "quien abona" lista SOLO los marcados aquí
     // ---- Proveedores ----
-    const FIELD_PROV_EMPRESA   = 'UF_CRM_1760557505';     // (ref.) campo vínculo-a-compañías del negocio; el <select> ahora lista todas las compañías proveedoras del CRM
+    const FIELD_PROV_EMPRESA   = 'UF_CRM_1760557505';     // vínculo a compañías del negocio; el <select> lista SOLO las compañías marcadas aquí
+    const FIELD_PROV_SERVICIOS = 'UF_CRM_1781023056226';   // detalle / servicios (enum MULTIPLE) — options vienen de crm.deal.fields
     const FIELD_PROV_HISTORIAL = 'UF_CRM_1780020580494';  // string MULTIPLE — una entrada por abono a proveedor
     const FIELD_PROV_ACUMULADO = 'UF_CRM_1780117784582';  // suma total de abonos pagados a proveedores (COP)
+    const FIELD_PROV_ACUMULADO_USD = 'UF_CRM_1780497791131';  // suma total pagada a proveedores en USD (solo valores USD)
 
     // Serialización del historial — el campo es string MULTIPLE en Bitrix:
     // cada abono va como una entrada independiente del array. Bitrix la renderiza
@@ -446,16 +454,23 @@
     }
 
     // ---- Concatenado de PROVEEDOR (string MULTIPLE) ----
-    // Misma estructura que cliente, con "Empresa" en lugar de "Nombre":
-    //   "2026-05-26 | Hoteles Riu Cancún | COP | TRM 1 | Valor 1.000.000 | Total 1.000.000"
+    // Estructura nueva (7 segmentos):
+    //   "2026-05-26 | Hoteles Riu Cancún | Hotel, Traslado | COP | TRM 1 | Valor 1.000.000 | Total 1.000.000"
+    // Compat con versiones previas:
+    //   - 6 segmentos sin servicios: "Fecha | Empresa | Moneda | TRM x | Valor x | Total x"
+    //   - 3 segmentos antiguo:       "Fecha | Empresa | Valor x"
     function provRowToLine(r) {
       const fecha   = String(r.fecha || '').replace(/\|/g, '/');
       const empresa = String(r.empresa || '').replace(/\|/g, '/').replace(/[\r\n]+/g, ' ').trim();
+      const servArr = Array.isArray(r.serviciosTexto) ? r.serviciosTexto
+                    : Array.isArray(r.servicios)     ? r.servicios
+                    : [];
+      const serv    = servArr.join(', ').replace(/\|/g, '/').replace(/[\r\n]+/g, ' ').trim();
       const mon     = String(r.moneda || 'COP');
       const trm     = fmtNumLegible(r.trm || 0);
       const val     = fmtNumLegible(r.valor || 0);
       const tot     = fmtNumLegible(r.valorCalculado || 0);
-      return `${fecha} | ${empresa} | ${mon} | TRM ${trm} | Valor ${val} | Total ${tot}`;
+      return `${fecha} | ${empresa} | ${serv} | ${mon} | TRM ${trm} | Valor ${val} | Total ${tot}`;
     }
     function provHistorialToArray(rows) {
       return (rows || []).map(provRowToLine);
@@ -463,12 +478,27 @@
     function lineToProvRow(line) {
       const txt = String(line || '').trim();
       if (!txt) return null;
-      // Detectar formato nuevo (6 segmentos con " | ") vs viejo (3 segmentos)
       const p = txt.split(' | ');
+      // Nuevo formato: 7 segmentos con servicios en posición 2
+      if (p.length >= 7) {
+        const servTxt = (p[2] || '').trim();
+        return {
+          fecha:   (p[0] || '').trim(),
+          empresa: (p[1] || '').trim(),
+          serviciosTexto: servTxt ? servTxt.split(',').map(s => s.trim()).filter(Boolean) : [],
+          moneda:  (p[3] || 'COP').trim(),
+          trm:     parseNumLegible(p[4]),
+          valor:   parseNumLegible(p[5]),
+          valorCalculado: parseNumLegible(p[6]),
+          archivos: []
+        };
+      }
+      // Compat: 6 segmentos sin servicios
       if (p.length >= 6) {
         return {
           fecha:   (p[0] || '').trim(),
           empresa: (p[1] || '').trim(),
+          serviciosTexto: [],
           moneda:  (p[2] || 'COP').trim(),
           trm:     parseNumLegible(p[3]),
           valor:   parseNumLegible(p[4]),
@@ -480,6 +510,7 @@
       return {
         fecha:   (p[0] || '').trim(),
         empresa: (p[1] || '').trim(),
+        serviciosTexto: [],
         moneda:  'COP',
         trm:     1,
         valor:   parseNumLegible(p[2]),
@@ -509,9 +540,9 @@
 
     // Estructura cruda como la devuelve crm.deal.get / crm.contact.get
     const MOCK_DEALS = {
-      '1234': { ID: '1234', TITLE: 'Cancún todo incluido 7 noches', CATEGORY_ID: '2', CONTACT_ID: '101', [FIELD_FECHA_VIAJE]: '2026-08-15T03:00:00+03:00', [FIELD_ACUMULADO]: '2000000' },
-      '5678': { ID: '5678', TITLE: 'Crucero Caribe 5 noches',       CATEGORY_ID: '2', CONTACT_ID: '102', [FIELD_FECHA_VIAJE]: '2026-10-02T03:00:00+03:00', [FIELD_ACUMULADO]: '0' },
-      '9999': { ID: '9999', TITLE: 'San Andrés 4 días 3 noches',    CATEGORY_ID: '2', CONTACT_ID: '103', [FIELD_FECHA_VIAJE]: '2026-07-20T03:00:00+03:00', [FIELD_ACUMULADO]: '750000' },
+      '1234': { ID: '1234', TITLE: 'Cancún todo incluido 7 noches', CATEGORY_ID: '2', CONTACT_ID: '101', OPPORTUNITY: '8500000', CURRENCY_ID: 'COP', [FIELD_FECHA_VIAJE]: '2026-08-15T03:00:00+03:00', [FIELD_ACUMULADO]: '2000000', [FIELD_PROV_EMPRESA]: ['1', '4', '7'], [FIELD_CLI_CONTACTOS]: ['101', '102'] },
+      '5678': { ID: '5678', TITLE: 'Crucero Caribe 5 noches',       CATEGORY_ID: '2', CONTACT_ID: '102', OPPORTUNITY: '12000000', CURRENCY_ID: 'COP', [FIELD_FECHA_VIAJE]: '2026-10-02T03:00:00+03:00', [FIELD_ACUMULADO]: '0', [FIELD_PROV_EMPRESA]: ['3', '5'], [FIELD_CLI_CONTACTOS]: ['102'] },
+      '9999': { ID: '9999', TITLE: 'San Andrés 4 días 3 noches',    CATEGORY_ID: '2', CONTACT_ID: '103', OPPORTUNITY: '3500000',  CURRENCY_ID: 'COP', [FIELD_FECHA_VIAJE]: '2026-07-20T03:00:00+03:00', [FIELD_ACUMULADO]: '750000', [FIELD_PROV_EMPRESA]: ['2', '8'], [FIELD_CLI_CONTACTOS]: ['103', '101'] },
       '0000': { ID: '0000', TITLE: 'Negocio fuera de Campañas',     CATEGORY_ID: '0', CONTACT_ID: '101' } // para probar validación
     };
     const MOCK_CONTACTS = {
@@ -538,6 +569,19 @@
     // Opciones del <select> de empresa proveedora (enum UF_CRM_1760557505).
     // Se cachean tras la primera lectura de crm.deal.fields.
     let empresaOptions = null;
+    // Opciones del <select> de "Nombre de quien abona" (cliente). Trae todos los contactos del CRM.
+    let contactOptions = null;
+    // Opciones del <select multiple> "Detalle / servicios" del proveedor (enum del campo UF_CRM_1781023056226).
+    // Se leen una sola vez de crm.deal.fields y se cachean.
+    let servicioOptions = null;
+    const MOCK_SERVICIOS = [
+      { id: '101', name: 'Hotel' },
+      { id: '102', name: 'Tiquete aéreo' },
+      { id: '103', name: 'Traslado' },
+      { id: '104', name: 'Tour' },
+      { id: '105', name: 'Seguro de viaje' },
+      { id: '106', name: 'Renta de auto' }
+    ];
 
     // ============================================================
     // VIEW SWITCHING
@@ -651,6 +695,12 @@
       document.getElementById('dealTelefono').textContent = contactFirstPhone(state.contact) || '—';
       document.getElementById('dealViaje').textContent    = state.deal?.TITLE || '—';
       document.getElementById('dealFecha').textContent    = formatFechaCO(state.deal?.[FIELD_FECHA_VIAJE]);
+      // OPPORTUNITY → total de la negociación (campo nativo de Bitrix). Formateado con puntos.
+      const opp = state.deal?.OPPORTUNITY;
+      const moneda = state.deal?.CURRENCY_ID || 'COP';
+      document.getElementById('dealTotal').textContent = (opp == null || opp === '')
+        ? '—'
+        : `${fmtNumLegible(Number(opp) || 0)} ${moneda}`;
       // reset paneles
       document.getElementById('listCliente').innerHTML = '';
       document.getElementById('listProv').innerHTML = '';
@@ -658,8 +708,14 @@
       addProvCard();
       // tab activa por defecto
       activateTab('cliente');
-      // cargar compañías proveedoras del CRM (async) y repoblar selects
+      // las compañías son específicas del negocio (UF_CRM_1760557505) → reset del cache.
+      empresaOptions = null;
       loadEmpresaOptions().then(repopulateEmpresaSelects);
+      // los contactos también son específicos del negocio (UF_CRM_1756499338) → reset del cache.
+      contactOptions = null;
+      loadContactOptions().then(repopulateContactSelects);
+      // los servicios son globales (enum del campo), no por negocio → no resetear cache.
+      loadServicioOptions().then(repopulateServicioSelects);
     }
 
     document.getElementById('btnBack').addEventListener('click', () => showView('viewSearch'));
@@ -685,6 +741,81 @@
     const trashIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
     const clipIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>`;
 
+    // El <select> "Nombre de quien abona" muestra SOLO los contactos marcados en el
+    // campo del negocio UF_CRM_1756499338 (vínculo múltiple a contactos). Si el negocio
+    // no tiene contactos marcados, el select queda vacío con un placeholder informativo.
+    async function loadContactOptions() {
+      if (Array.isArray(contactOptions) && contactOptions.length) return contactOptions;
+
+      // 1) Sacar los IDs marcados en el campo del negocio.
+      const raw = state.deal?.[FIELD_CLI_CONTACTOS];
+      const ids = (Array.isArray(raw) ? raw : (raw ? [raw] : []))
+        .map(v => (v && typeof v === 'object') ? (v.VALUE_ID ?? v.VALUE ?? v.ID ?? v.value ?? v.id) : v)
+        .map(v => String(v ?? '').trim())
+        .filter(Boolean);
+      console.log('[VCC] Contactos marcados en el negocio:', ids);
+
+      if (typeof BX24 === 'undefined') {
+        const setIds = new Set(ids.map(String));
+        const fuente = ids.length
+          ? Object.values(MOCK_CONTACTS).filter(c => setIds.has(String(c.ID)))
+          : Object.values(MOCK_CONTACTS);
+        contactOptions = fuente.map(c => ({
+          id: String(c.ID),
+          name: `${c.NAME || ''} ${c.LAST_NAME || ''}`.trim() || `Contacto #${c.ID}`
+        }));
+        return contactOptions;
+      }
+
+      if (!ids.length) {
+        contactOptions = [];
+        console.warn('[VCC] El negocio no tiene contactos en UF_CRM_1756499338.');
+        return contactOptions;
+      }
+
+      let list = [];
+      try {
+        list = await bxCallList('crm.contact.list', {
+          filter: { ID: ids },
+          select: ['ID', 'NAME', 'LAST_NAME', 'SECOND_NAME'],
+          order: { LAST_NAME: 'ASC', NAME: 'ASC' }
+        });
+        console.log('[VCC] Contactos del negocio cargados:', list.length);
+      } catch (e) {
+        console.warn('[VCC] crm.contact.list (ids del negocio) falló:', e);
+      }
+      contactOptions = (list || []).map(c => {
+        const nombre = `${c.NAME || ''} ${c.SECOND_NAME || ''} ${c.LAST_NAME || ''}`
+          .replace(/\s+/g, ' ').trim() || `Contacto #${c.ID}`;
+        return { id: String(c.ID), name: nombre };
+      });
+      return contactOptions;
+    }
+
+    function contactOptionsHtml(selected) {
+      let placeholder;
+      if (!Array.isArray(contactOptions)) {
+        placeholder = '<option value="">Cargando clientes…</option>';
+      } else if (contactOptions.length === 0) {
+        placeholder = '<option value="">Este negocio no tiene contactos marcados</option>';
+      } else {
+        placeholder = '<option value="">Selecciona un cliente…</option>';
+      }
+      const opts = (contactOptions || []).map(c =>
+        `<option value="${c.id}"${String(c.id) === String(selected) ? ' selected' : ''}>${c.name}</option>`
+      ).join('');
+      return placeholder + opts;
+    }
+
+    function repopulateContactSelects() {
+      document.querySelectorAll('#listCliente .nombre').forEach(sel => {
+        if (sel.tagName !== 'SELECT') return;
+        const prev = sel.value;
+        const preselect = prev || String(state.deal?.CONTACT_ID || '');
+        sel.innerHTML = contactOptionsHtml(preselect);
+      });
+    }
+
     let clienteSeq = 0;
     function addClienteCard() {
       clienteSeq++;
@@ -703,7 +834,9 @@
         <div class="grid grid-cols-12 gap-3">
           <div class="col-span-12 sm:col-span-6">
             <label class="ui-label">Nombre de quien abona</label>
-            <input type="text" class="ui-input nombre" placeholder="Nombre completo" />
+            <select class="ui-select nombre">
+              ${contactOptionsHtml(state.deal?.CONTACT_ID)}
+            </select>
           </div>
           <div class="col-span-6 sm:col-span-2">
             <label class="ui-label">Moneda</label>
@@ -719,7 +852,7 @@
           </div>
           <div class="col-span-6 sm:col-span-4">
             <label class="ui-label">Valor recibido</label>
-            <input type="number" step="0.01" min="0" class="ui-input valor" placeholder="0.00" />
+            <input type="text" inputmode="numeric" class="ui-input valor" placeholder="0" />
           </div>
           <div class="col-span-12 sm:col-span-4 total-wrap">
             <label class="ui-label">Total (COP)</label>
@@ -745,45 +878,63 @@
     // ============================================================
     // ABONOS PROVEEDOR
     // ============================================================
-    // El asesor elige libremente cualquier compañía proveedora del CRM.
-    // Listamos las compañías tipo Proveedor (COMPANY_TYPE = 'SUPPLIER') y, si no
-    // hubiera ninguna con ese tipo, caemos a listar todas las compañías.
+    // El <select> muestra SOLO las compañías marcadas en el campo del negocio
+    // UF_CRM_1760557505 (vínculo múltiple a compañías). Si el negocio no tiene
+    // compañías marcadas, el select queda vacío con un placeholder informativo.
     async function loadEmpresaOptions() {
       // Solo cachear si ya hay opciones reales (no cachear un array vacío → permite reintentar).
       if (Array.isArray(empresaOptions) && empresaOptions.length) return empresaOptions;
+
+      // 1) Sacar los IDs marcados en el campo del negocio (puede venir como string, array
+      //    de strings, o array de objetos con VALUE_ID / VALUE / ID según versión del API).
+      const raw = state.deal?.[FIELD_PROV_EMPRESA];
+      const ids = (Array.isArray(raw) ? raw : (raw ? [raw] : []))
+        .map(v => (v && typeof v === 'object') ? (v.VALUE_ID ?? v.VALUE ?? v.ID ?? v.value ?? v.id) : v)
+        .map(v => String(v ?? '').trim())
+        .filter(Boolean);
+      console.log('[VCC] Compañías marcadas en el negocio:', ids);
+
       if (typeof BX24 === 'undefined') {
-        empresaOptions = MOCK_EMPRESAS.map(e => ({ id: String(e.id), name: e.name }));
+        // En modo local: filtramos MOCK_EMPRESAS por los ids del campo si hay, o mostramos todo.
+        const setIds = new Set(ids.map(String));
+        const fuente = ids.length
+          ? MOCK_EMPRESAS.filter(e => setIds.has(String(e.id)))
+          : MOCK_EMPRESAS;
+        empresaOptions = fuente.map(e => ({ id: String(e.id), name: e.name }));
         return empresaOptions;
       }
-      // Intenta filtrando por tipo proveedor; si falla o no hay, lista todas las compañías.
+
+      if (!ids.length) {
+        empresaOptions = [];
+        console.warn('[VCC] El negocio no tiene compañías en UF_CRM_1760557505.');
+        return empresaOptions;
+      }
+
+      // 2) Traer solo esas compañías por ID.
       let list = [];
       try {
         list = await bxCallList('crm.company.list', {
-          filter: { COMPANY_TYPE: 'SUPPLIER' },
+          filter: { ID: ids },
           select: ['ID', 'TITLE'],
           order: { TITLE: 'ASC' }
         });
-        console.log('[VCC] Compañías SUPPLIER encontradas:', list.length);
       } catch (e) {
-        console.warn('[VCC] crm.company.list (SUPPLIER) falló:', e);
-      }
-      if (!list.length) {
-        try {
-          list = await bxCallList('crm.company.list', { select: ['ID', 'TITLE'], order: { TITLE: 'ASC' } });
-          console.log('[VCC] Fallback: todas las compañías encontradas:', list.length);
-        } catch (e) {
-          console.warn('[VCC] crm.company.list (todas) falló:', e);
-        }
+        console.warn('[VCC] crm.company.list (ids del negocio) falló:', e);
       }
       empresaOptions = (list || []).map(c => ({ id: String(c.ID), name: c.TITLE }));
-      console.log('[VCC] Compañías proveedoras cargadas:', empresaOptions.length);
+      console.log('[VCC] Compañías del negocio cargadas:', empresaOptions.length);
       return empresaOptions;
     }
 
     function empresaOptionsHtml(selected) {
-      const placeholder = empresaOptions
-        ? '<option value="">Selecciona una empresa…</option>'
-        : '<option value="">Cargando empresas…</option>';
+      let placeholder;
+      if (!Array.isArray(empresaOptions)) {
+        placeholder = '<option value="">Cargando empresas…</option>';
+      } else if (empresaOptions.length === 0) {
+        placeholder = '<option value="">Este negocio no tiene compañías marcadas</option>';
+      } else {
+        placeholder = '<option value="">Selecciona una empresa…</option>';
+      }
       const opts = (empresaOptions || []).map(e =>
         `<option value="${e.id}"${String(e.id) === String(selected) ? ' selected' : ''}>${e.name}</option>`
       ).join('');
@@ -795,6 +946,45 @@
       document.querySelectorAll('#listProv .empresa').forEach(sel => {
         const prev = sel.value;
         sel.innerHTML = empresaOptionsHtml(prev);
+      });
+    }
+
+    // Opciones del campo enum MULTIPLE "Detalle / servicios" → vienen de crm.deal.fields.items.
+    async function loadServicioOptions() {
+      if (Array.isArray(servicioOptions) && servicioOptions.length) return servicioOptions;
+      if (typeof BX24 === 'undefined') {
+        servicioOptions = MOCK_SERVICIOS.map(s => ({ id: String(s.id), name: s.name }));
+        return servicioOptions;
+      }
+      try {
+        const res = await bxCall('crm.deal.fields', {});
+        const field = res?.[FIELD_PROV_SERVICIOS];
+        const items = Array.isArray(field?.items) ? field.items : [];
+        servicioOptions = items.map(it => ({ id: String(it.ID ?? it.id), name: String(it.VALUE ?? it.value ?? '') }));
+        console.log('[VCC] Servicios cargados:', servicioOptions.length);
+      } catch (e) {
+        console.warn('[VCC] crm.deal.fields (servicios) falló:', e);
+        servicioOptions = [];
+      }
+      return servicioOptions;
+    }
+
+    // HTML para <select multiple> de servicios. `selected` puede ser array de ids o vacío.
+    function servicioOptionsHtml(selected) {
+      const sel = new Set((Array.isArray(selected) ? selected : []).map(String));
+      if (!Array.isArray(servicioOptions)) return ''; // mientras carga, el select queda vacío
+      return (servicioOptions || []).map(s =>
+        `<option value="${s.id}"${sel.has(String(s.id)) ? ' selected' : ''}>${s.name}</option>`
+      ).join('');
+    }
+
+    function repopulateServicioSelects() {
+      document.querySelectorAll('#listProv .servicios').forEach(sel => {
+        const prev = [...sel.selectedOptions].map(o => o.value);
+        sel.innerHTML = servicioOptionsHtml(prev);
+        // Refrescar el dropdown custom (checkboxes + label) de la tarjeta.
+        const wrap = sel.closest('.ms-wrap');
+        if (wrap && typeof wrap._refreshMS === 'function') wrap._refreshMS();
       });
     }
 
@@ -821,6 +1011,17 @@
               ${opts}
             </select>
           </div>
+          <div class="col-span-12 sm:col-span-6">
+            <label class="ui-label">Detalle / servicios</label>
+            <div class="ms-wrap" style="position: relative;">
+              <button type="button" class="ui-select ms-toggle" style="cursor: pointer; text-align: left; align-items: center; justify-content: space-between; gap: 0.5rem;">
+                <span class="ms-label" style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: hsl(var(--muted-foreground));">Selecciona uno o varios…</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.6; flex-shrink: 0;"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+              <select class="servicios" multiple hidden>${servicioOptionsHtml()}</select>
+              <div class="ms-panel" style="display: none; position: absolute; z-index: 50; top: 100%; left: 0; right: 0; margin-top: 0.25rem; max-height: 14rem; overflow-y: auto; background: hsl(var(--background)); border: 1px solid hsl(var(--input)); border-radius: calc(var(--radius) - 2px); box-shadow: 0 4px 12px rgba(0,0,0,0.08); padding: 0.25rem;"></div>
+            </div>
+          </div>
           <div class="col-span-6 sm:col-span-2">
             <label class="ui-label">Moneda</label>
             <select class="ui-select moneda">
@@ -835,7 +1036,7 @@
           </div>
           <div class="col-span-6 sm:col-span-4">
             <label class="ui-label">Valor pagado</label>
-            <input type="number" step="0.01" min="0" class="ui-input valor" placeholder="0.00" />
+            <input type="text" inputmode="numeric" class="ui-input valor" placeholder="0" />
           </div>
           <div class="col-span-12 sm:col-span-4 total-wrap">
             <label class="ui-label">Total (COP)</label>
@@ -853,7 +1054,78 @@
       `;
       document.getElementById('listProv').appendChild(wrap);
       wireAbonoCard(wrap, 'prov');
+      wireServiciosDropdown(wrap);
       renumberCards('prov');
+    }
+
+    // Multi-select custom para "Detalle / servicios": botón estilo ui-select + panel con
+    // checkboxes. El <select multiple class="servicios"> oculto guarda el estado real,
+    // así collectData() sigue leyendo .selectedOptions sin cambios.
+    function wireServiciosDropdown(card) {
+      const wrap   = card.querySelector('.ms-wrap');
+      if (!wrap) return;
+      const toggle = wrap.querySelector('.ms-toggle');
+      const label  = wrap.querySelector('.ms-label');
+      const panel  = wrap.querySelector('.ms-panel');
+      const hidden = wrap.querySelector('select.servicios');
+
+      function renderCheckboxes() {
+        panel.innerHTML = '';
+        const opts = [...hidden.options];
+        if (!opts.length) {
+          panel.innerHTML = '<div style="padding: 0.5rem 0.75rem; font-size: 0.8125rem; color: hsl(var(--muted-foreground));">Cargando opciones…</div>';
+          return;
+        }
+        opts.forEach((opt, i) => {
+          const row = document.createElement('label');
+          row.style.cssText = 'display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.6rem; font-size: 0.875rem; border-radius: 4px; cursor: pointer;';
+          row.addEventListener('mouseenter', () => row.style.background = 'hsl(var(--muted))');
+          row.addEventListener('mouseleave', () => row.style.background = '');
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.value = opt.value;
+          cb.checked = opt.selected;
+          cb.style.cssText = 'width: 1rem; height: 1rem; accent-color: hsl(262 83% 58%); flex-shrink: 0;';
+          cb.addEventListener('change', () => {
+            hidden.options[i].selected = cb.checked;
+            updateLabel();
+          });
+          const txt = document.createElement('span');
+          txt.textContent = opt.textContent;
+          txt.style.cssText = 'flex: 1; overflow: hidden; text-overflow: ellipsis;';
+          row.appendChild(cb);
+          row.appendChild(txt);
+          panel.appendChild(row);
+        });
+      }
+
+      function updateLabel() {
+        const sel = [...hidden.selectedOptions].map(o => o.textContent.trim()).filter(Boolean);
+        if (sel.length === 0) {
+          label.textContent = 'Selecciona uno o varios…';
+          label.style.color = 'hsl(var(--muted-foreground))';
+        } else {
+          label.textContent = sel.join(', ');
+          label.style.color = 'hsl(var(--foreground))';
+        }
+      }
+
+      function open()  { renderCheckboxes(); panel.style.display = 'block'; }
+      function close() { panel.style.display = 'none'; }
+
+      toggle.addEventListener('click', e => {
+        e.stopPropagation();
+        const isOpen = panel.style.display === 'block';
+        // cerrar otros paneles abiertos en otras tarjetas
+        document.querySelectorAll('.ms-panel').forEach(p => { if (p !== panel) p.style.display = 'none'; });
+        if (isOpen) close(); else open();
+      });
+      panel.addEventListener('click', e => e.stopPropagation());
+      document.addEventListener('click', close);
+
+      // exponer un método para que repopulateServicioSelects() refresque la UI
+      wrap._refreshMS = () => { renderCheckboxes(); updateLabel(); };
+      updateLabel();
     }
 
     document.getElementById('addProvBtn').addEventListener('click', addProvCard);
@@ -911,16 +1183,35 @@
       const trm    = card.querySelector('.trm');
       const valor  = card.querySelector('.valor');
       const total  = card.querySelector('.total');
+
+      // Formato en vivo de "Valor" con separador de miles "1.000.000".
+      // Solo dígitos; los puntos se reinsertan al renderizar. Cursor al final.
+      if (valor) {
+        valor.addEventListener('input', () => {
+          const soloDigitos = valor.value.replace(/\D/g, '');
+          const n = soloDigitos ? Number(soloDigitos) : 0;
+          valor.value = n ? n.toLocaleString('es-CO') : '';
+        });
+      }
+
       if (moneda && trm && valor && total) {
         function recalc() {
           const esCOP = moneda.value === 'COP';
+          // TRM no aplica cuando la moneda es COP → deshabilitada y vacía.
           if (esCOP) {
+            trm.disabled = true;
+            trm.value = '';
+            trm.placeholder = 'No aplica';
+            trm.style.background = 'hsl(var(--muted))';
             total.disabled = true;
             total.value = '—';
             return;
           }
+          trm.disabled = false;
+          trm.placeholder = '0.00';
+          trm.style.background = '';
           total.disabled = false;
-          const v = VCC.parseNumber(valor.value);
+          const v = parseNumLegible(valor.value);
           const t = VCC.parseNumber(trm.value);
           total.value = (v > 0 && t > 0) ? VCC.formatCOP(v * t) : '$ 0';
         }
@@ -1161,10 +1452,12 @@
       }
 
       // 1) Historial (string MULTIPLE) + acumulado → crm.deal.update (campos no-file, OK).
-      //    El acumulado se guarda con separadores de miles ("1.000.000") para que se
-      //    vea legible en la ficha del negocio; al releerlo lo parseamos con parseNumLegible.
+      //    FIELD_ACUMULADO (cliente COP) ahora es campo string en Bitrix, igual que el de
+      //    proveedor, así que aceptamos el formato "1.000.000" con puntos vía fmtNumLegible.
+      //    USD sigue siendo numérico (Number crudo).
       const updateFields = { [FIELD_HISTORIAL]: historialArr };
       if (opts.nuevoTotal != null) updateFields[FIELD_ACUMULADO] = fmtNumLegible(opts.nuevoTotal);
+      if (opts.nuevoTotalUSD != null) updateFields[FIELD_ACUMULADO_USD] = Number(opts.nuevoTotalUSD) || 0;
       console.log('[VCC] saveAbonosFile → crm.deal.update', {
         dealId, entradasHistorial: historialArr.length,
         nuevoTotal: opts.nuevoTotal ?? '(sin cambio)'
@@ -1212,6 +1505,8 @@
       const updateFields = { [FIELD_PROV_HISTORIAL]: historialArr };
       // acumulado con separadores de miles ("1.000.000") para que se vea legible en la ficha
       if (opts.nuevoTotal != null) updateFields[FIELD_PROV_ACUMULADO] = fmtNumLegible(opts.nuevoTotal);
+      // acumulado USD (envío numérico para evitar el problema de "3.6" si el campo es numérico)
+      if (opts.nuevoTotalUSD != null) updateFields[FIELD_PROV_ACUMULADO_USD] = Number(opts.nuevoTotalUSD) || 0;
       console.log('[VCC] saveProvAbonos → crm.deal.update', {
         dealId, entradasHistorial: historialArr.length, nuevoTotal: opts.nuevoTotal ?? '(sin cambio)'
       });
@@ -1228,11 +1523,16 @@
       const cliente = [...document.querySelectorAll('#listCliente .abono-card')].map(c => {
         const moneda = c.querySelector('.moneda').value;
         const trm    = VCC.parseNumber(c.querySelector('.trm').value);
-        const valor  = VCC.parseNumber(c.querySelector('.valor').value);
+        const valor  = parseNumLegible(c.querySelector('.valor').value);
         const valorCalculado = moneda === 'COP' ? valor : (valor * trm);
         const fileObjs = Array.isArray(c._files) ? c._files.slice() : [];
+        const nombreSel = c.querySelector('.nombre');
+        // El nombre es ahora un <select> con contactos del CRM; guardamos id + texto.
+        const contactoId = nombreSel?.value || '';
+        const nombre = contactoId ? (nombreSel.selectedOptions[0]?.textContent || '').trim() : '';
         return {
-          nombre: c.querySelector('.nombre').value.trim(),
+          contactoId,
+          nombre,
           moneda,
           trm: moneda === 'COP' ? 1 : trm,
           valor,
@@ -1244,12 +1544,18 @@
       const prov = [...document.querySelectorAll('#listProv .abono-card')].map(c => {
         const moneda = c.querySelector('.moneda').value;
         const trm    = VCC.parseNumber(c.querySelector('.trm').value);
-        const valor  = VCC.parseNumber(c.querySelector('.valor').value);
+        const valor  = parseNumLegible(c.querySelector('.valor').value);
         const valorCalculado = moneda === 'COP' ? valor : (valor * trm);
         const fileObjs = Array.isArray(c._files) ? c._files.slice() : [];
+        const servSel = c.querySelector('.servicios');
+        const servSelected = servSel ? [...servSel.selectedOptions] : [];
+        const serviciosIds   = servSelected.map(o => o.value).filter(Boolean);
+        const serviciosTexto = servSelected.map(o => o.textContent.trim()).filter(Boolean);
         return {
           empresaId: c.querySelector('.empresa').value,
           empresa:   c.querySelector('.empresa').selectedOptions[0]?.textContent || '',
+          serviciosIds,
+          serviciosTexto,
           moneda,
           trm: moneda === 'COP' ? 1 : trm,
           valor,
@@ -1290,7 +1596,8 @@
       try {
         // 1. Releer el deal completo (acumulado actual + archivo previo si existe)
         const dealData = await getBitrixDeal(state.dealId);
-        const actual = parseNumLegible(dealData?.[FIELD_ACUMULADO] || 0);
+        const actual    = parseNumLegible(dealData?.[FIELD_ACUMULADO] || 0);
+        const actualUSD = parseNumLegible(dealData?.[FIELD_ACUMULADO_USD] || 0);
 
         // 2. Cargar filas previas del archivo Excel (si existe en el campo)
         const filasPrevias = await loadAbonosFile(state.dealId, dealData);
@@ -1308,9 +1615,13 @@
         }));
         const todasLasFilas = filasPrevias.concat(nuevasFilas);
 
-        // 4. Sumar nuevos abonos al acumulado y actualizar campo
+        // 4. Sumar nuevos abonos al acumulado COP + acumulado USD por separado
         const sumaAbonos = nuevasFilas.reduce((acc, r) => acc + r.valorCalculado, 0);
         const nuevoTotal = actual + sumaAbonos;
+        const sumaUSD    = nuevasFilas
+          .filter(r => r.moneda === 'USD')
+          .reduce((acc, r) => acc + (Number(r.valor) || 0), 0);
+        const nuevoTotalUSD = actualUSD + sumaUSD;
         // 5. Recolectar comprobantes (File objects) de TODAS las tarjetas cliente válidas
         const comprobantes = [];
         validos.forEach(a => {
@@ -1324,7 +1635,7 @@
           null, // headerData ya no se usa (sin Excel)
           todasLasFilas,
           dealData,
-          { nuevoTotal, sumaAbonos, nuevasFilas, comprobantes }
+          { nuevoTotal, nuevoTotalUSD, sumaAbonos, sumaUSD, nuevasFilas, comprobantes }
         );
 
         // Comentario en el timeline con el resumen + comprobantes inline
@@ -1339,12 +1650,14 @@
         );
 
         if (state.deal) {
-          state.deal[FIELD_ACUMULADO] = nuevoTotal;
-          state.deal[FIELD_HISTORIAL] = historialToArray(todasLasFilas);
+          state.deal[FIELD_ACUMULADO]     = nuevoTotal;
+          state.deal[FIELD_ACUMULADO_USD] = nuevoTotalUSD;
+          state.deal[FIELD_HISTORIAL]     = historialToArray(todasLasFilas);
         }
         if (typeof BX24 === 'undefined' && MOCK_DEALS[state.dealId]) {
-          MOCK_DEALS[state.dealId][FIELD_ACUMULADO] = nuevoTotal;
-          MOCK_DEALS[state.dealId][FIELD_HISTORIAL] = historialToArray(todasLasFilas);
+          MOCK_DEALS[state.dealId][FIELD_ACUMULADO]     = nuevoTotal;
+          MOCK_DEALS[state.dealId][FIELD_ACUMULADO_USD] = nuevoTotalUSD;
+          MOCK_DEALS[state.dealId][FIELD_HISTORIAL]     = historialToArray(todasLasFilas);
         }
 
         console.log('[VCC] Abonos registrados:', {
@@ -1392,9 +1705,10 @@
       btn.innerHTML = 'Registrando…';
 
       try {
-        // 1. Releer el deal (historial + acumulado previo)
+        // 1. Releer el deal (historial + acumulado previo COP y USD)
         const dealData = await getBitrixDeal(state.dealId);
-        const actual = parseNumLegible(dealData?.[FIELD_PROV_ACUMULADO] || 0);
+        const actual    = parseNumLegible(dealData?.[FIELD_PROV_ACUMULADO] || 0);
+        const actualUSD = parseNumLegible(dealData?.[FIELD_PROV_ACUMULADO_USD] || 0);
         const filasPrevias = await loadProvAbonos(state.dealId, dealData);
 
         // 2. Construir las nuevas filas (con moneda/TRM/valor/total)
@@ -1402,6 +1716,7 @@
         const nuevasFilas = validos.map(a => ({
           fecha: fechaHoy,
           empresa: a.empresa,
+          serviciosTexto: a.serviciosTexto || [],
           moneda: a.moneda,
           trm: a.trm,
           valor: a.valor,
@@ -1410,16 +1725,20 @@
         }));
         const todasLasFilas = filasPrevias.concat(nuevasFilas);
 
-        // 3. Sumar a acumulado (en COP, usando valorCalculado)
+        // 3. Sumar a acumulado COP (valorCalculado) y a acumulado USD (solo USD crudo)
         const sumaAbonos = nuevasFilas.reduce((acc, r) => acc + (Number(r.valorCalculado) || 0), 0);
         const nuevoTotal = actual + sumaAbonos;
+        const sumaUSD    = nuevasFilas
+          .filter(r => r.moneda === 'USD')
+          .reduce((acc, r) => acc + (Number(r.valor) || 0), 0);
+        const nuevoTotalUSD = actualUSD + sumaUSD;
 
         // 4. Comprobantes
         const comprobantes = [];
         validos.forEach(a => { if (Array.isArray(a.fileObjs)) comprobantes.push(...a.fileObjs); });
 
-        // 5. Guardar historial + acumulado + comprobantes
-        const saveRes = await saveProvAbonos(state.dealId, todasLasFilas, dealData, { nuevoTotal, comprobantes });
+        // 5. Guardar historial + acumulado COP + acumulado USD + comprobantes
+        const saveRes = await saveProvAbonos(state.dealId, todasLasFilas, dealData, { nuevoTotal, nuevoTotalUSD, comprobantes });
 
         // 5b. Comentario en el timeline con el resumen + comprobantes inline
         const lineasCom = validos.map(a => {
@@ -1434,12 +1753,14 @@
 
         // 6. sincronizar memoria / mock
         if (state.deal) {
-          state.deal[FIELD_PROV_HISTORIAL] = provHistorialToArray(todasLasFilas);
-          state.deal[FIELD_PROV_ACUMULADO] = nuevoTotal;
+          state.deal[FIELD_PROV_HISTORIAL]     = provHistorialToArray(todasLasFilas);
+          state.deal[FIELD_PROV_ACUMULADO]     = nuevoTotal;
+          state.deal[FIELD_PROV_ACUMULADO_USD] = nuevoTotalUSD;
         }
         if (typeof BX24 === 'undefined' && MOCK_DEALS[state.dealId]) {
-          MOCK_DEALS[state.dealId][FIELD_PROV_HISTORIAL] = provHistorialToArray(todasLasFilas);
-          MOCK_DEALS[state.dealId][FIELD_PROV_ACUMULADO] = nuevoTotal;
+          MOCK_DEALS[state.dealId][FIELD_PROV_HISTORIAL]     = provHistorialToArray(todasLasFilas);
+          MOCK_DEALS[state.dealId][FIELD_PROV_ACUMULADO]     = nuevoTotal;
+          MOCK_DEALS[state.dealId][FIELD_PROV_ACUMULADO_USD] = nuevoTotalUSD;
         }
 
         console.log('[VCC] Abonos a proveedor registrados:', {
